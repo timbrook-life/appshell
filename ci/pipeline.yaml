@@ -1,0 +1,80 @@
+---
+resource_types:
+  - name: helm-indexer
+    type: docker-image
+    source:
+      repository: 7imbrook/helm-indexer
+
+resources:
+  - name: appshell-development
+    type: git
+    icon: github-circle
+    source:
+      uri: "https://github.com/timbrook-life/appshell.git"
+      branch: development
+  - name: appshell-version
+    type: semver
+    source:
+      driver: s3
+      bucket: internal
+      initial_version: 1.1.0
+      key: versions/appshell
+      endpoint: sfo2.digitaloceanspaces.com
+      access_key_id: ((s3.id))
+      secret_access_key: ((s3.key))
+  - name: release-appshell
+    type: s3
+    source:
+      bucket: helm-charts
+      regexp: appshell-(.*).tgz
+      endpoint: sfo2.digitaloceanspaces.com
+      access_key_id: ((s3.id))
+      secret_access_key: ((s3.key))
+  - name: chart-indexer
+    type: helm-indexer
+    source:
+      bucket: helm-charts
+      access_key_id: ((s3.id))
+      secret_access_key: ((s3.key))
+
+jobs:
+  - name: Appshell Cont.
+    plan:
+      - get: appshell-development
+        trigger: true
+      - get: appshell-version
+        params:
+          pre_without_version: true
+          pre: continuous
+      - task: Package
+        config:
+          platform: linux
+          image_resource:
+            type: docker-image
+            source:
+              repository: 7imbrook/ci-deploy-tools
+          inputs:
+            - name: appshell-development
+              path: appshell
+            - name: appshell-version
+              path: version
+          outputs:
+            - name: package
+          run:
+            path: bash
+            args:
+              - -c
+              - |
+                version=$(cat version/version)
+                helm package --save=false --version=$version -d=./package ./appshell
+      - put: release-appshell
+        params:
+          file: "./package/*"
+          acl: public-read
+        inputs:
+          - package
+      - put: chart-indexer
+        params:
+          artifacts: package
+        inputs:
+          - package
